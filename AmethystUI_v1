@@ -1,0 +1,1293 @@
+--//====================================================--
+--//              AmethystGUI v1.0 PREMIUM             --
+--//====================================================--
+
+local AmethystGUI = {}
+AmethystGUI.__index = AmethystGUI
+
+--// Services
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+--//====================================================--
+--//                    INTERNALS                      --
+--//====================================================--
+
+AmethystGUI.Flags = {}
+AmethystGUI.Windows = {}
+AmethystGUI.Theme = {}
+
+local GUI_FOLDER = "AmethystGUI"
+local CONFIG_FOLDER = GUI_FOLDER .. "/Configurations"
+local AUTH_FOLDER = GUI_FOLDER .. "/Auth"
+local KEY_FILE = GUI_FOLDER .. "/KeySystem.json"
+
+local function safeCall(func,...)
+	if not func then return end
+	local ok,res = pcall(func,...)
+	if not ok then
+		warn("AmethystGUI:",res)
+		return nil
+	end
+	return res
+end
+
+local function ensureFolder(path)
+	if makefolder and not isfolder(path) then
+		safeCall(makefolder,path)
+	end
+end
+
+ensureFolder(GUI_FOLDER)
+ensureFolder(CONFIG_FOLDER)
+ensureFolder(AUTH_FOLDER)
+
+--//====================================================--
+--//                     THEME                         --
+--//====================================================--
+
+AmethystGUI.Theme.Amethyst = {
+	Text = Color3.fromRGB(235,235,245),
+	Background = Color3.fromRGB(20,15,30),
+	Topbar = Color3.fromRGB(28,20,42),
+	Element = Color3.fromRGB(35,25,55),
+	ElementHover = Color3.fromRGB(48,35,75),
+	Stroke = Color3.fromRGB(70,50,105),
+	Accent = Color3.fromRGB(170,90,255),
+	AccentSoft = Color3.fromRGB(120,60,190),
+	Danger = Color3.fromRGB(200,70,70)
+}
+
+--//====================================================--
+--//                    UTILITIES                      --
+--//====================================================--
+
+local function create(class,props)
+	local obj = Instance.new(class)
+	for k,v in pairs(props or {}) do
+		obj[k]=v
+	end
+	return obj
+end
+
+local function tween(obj,props,time)
+	local t = TweenService:Create(
+		obj,
+		TweenInfo.new(time or 0.35,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),
+		props
+	)
+	t:Play()
+	return t
+end
+
+local function round(num)
+	return math.floor(num+0.5)
+end
+
+--//====================================================--
+--//                 CONFIG SYSTEM                     --
+--//====================================================--
+
+function AmethystGUI:SaveConfiguration(name)
+	if not writefile then return end
+	if not name then return end
+
+	local data = {}
+
+	for flag,element in pairs(self.Flags) do
+		if element.Type=="Color" then
+			data[flag] = {
+				R = element.Value.R*255,
+				G = element.Value.G*255,
+				B = element.Value.B*255,
+				A = element.ValueA or 1
+			}
+		else
+			data[flag] = element.Value
+		end
+	end
+
+	safeCall(writefile,CONFIG_FOLDER.."/"..name..".json",HttpService:JSONEncode(data))
+end
+
+function AmethystGUI:LoadConfiguration(name)
+	if not readfile then return end
+	if not name then return end
+
+	local path = CONFIG_FOLDER.."/"..name..".json"
+	if not isfile or not isfile(path) then return end
+
+	local raw = safeCall(readfile,path)
+	local decoded = safeCall(HttpService.JSONDecode,HttpService,raw)
+	if not decoded then return end
+
+	for flag,value in pairs(decoded) do
+		if self.Flags[flag] then
+			self.Flags[flag]:Set(value)
+		end
+	end
+end
+
+--//====================================================--
+--//                 CREATE WINDOW                     --
+--//====================================================--
+
+function AmethystGUI:CreateWindow(settings)
+	local Theme = self.Theme[settings.Theme or "Amethyst"]
+	local Window = {}
+	Window.Tabs = {}
+	Window.Main = nil
+	Window.ScreenGui = nil
+
+	local ScreenGui = create("ScreenGui",{
+		Name="AmethystGUI",
+		IgnoreGuiInset=true,
+		ResetOnSpawn=false
+	})
+
+	if gethui then
+		ScreenGui.Parent = gethui()
+	else
+		ScreenGui.Parent = CoreGui
+	end
+
+	local Main = create("Frame",{
+		Size=UDim2.new(0,580,0,460),
+		Position=UDim2.new(0.5,0,0.5,0),
+		AnchorPoint=Vector2.new(0.5,0.5),
+		BackgroundColor3=Theme.Background,
+		Parent=ScreenGui
+	})
+
+	create("UICorner",{CornerRadius=UDim.new(0,18),Parent=Main})
+	create("UIStroke",{Color=Theme.Stroke,Thickness=1.5,Parent=Main})
+
+	Main.BackgroundTransparency=1
+	Main.Size=UDim2.new(0,480,0,360)
+	tween(Main,{
+		BackgroundTransparency=0,
+		Size=UDim2.new(0,580,0,460)
+	},0.45)
+
+	local Topbar = create("Frame",{
+		Size=UDim2.new(1,0,0,60),
+		BackgroundColor3=Theme.Topbar,
+		Parent=Main
+	})
+	create("UICorner",{CornerRadius=UDim.new(0,18),Parent=Topbar})
+
+	local Title = create("TextLabel",{
+		Size=UDim2.new(1,-20,1,0),
+		Position=UDim2.new(0,20,0,0),
+		BackgroundTransparency=1,
+		Text=settings.Name or "AmethystGUI",
+		TextColor3=Theme.Text,
+		TextSize=22,
+		Font=Enum.Font.GothamBold,
+		TextXAlignment=Enum.TextXAlignment.Left,
+		Parent=Topbar
+	})
+
+	-- Drag
+	do
+		local dragging=false
+		local dragStart,startPos
+
+		Topbar.InputBegan:Connect(function(input)
+			if input.UserInputType==Enum.UserInputType.MouseButton1 then
+				dragging=true
+				dragStart=input.Position
+				startPos=Main.Position
+			end
+		end)
+
+		UserInputService.InputChanged:Connect(function(input)
+			if dragging and input.UserInputType==Enum.UserInputType.MouseMovement then
+				local delta=input.Position-dragStart
+				Main.Position=UDim2.new(
+					startPos.X.Scale,
+					startPos.X.Offset+delta.X,
+					startPos.Y.Scale,
+					startPos.Y.Offset+delta.Y
+				)
+			end
+		end)
+
+		UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType==Enum.UserInputType.MouseButton1 then
+				dragging=false
+			end
+		end)
+	end
+
+	-- Tabs holder
+	local TabHolder = create("Frame",{
+		Size=UDim2.new(0,160,1,-60),
+		Position=UDim2.new(0,0,0,60),
+		BackgroundTransparency=1,
+		Parent=Main
+	})
+
+	create("UIListLayout",{
+		Padding=UDim.new(0,8),
+		Parent=TabHolder
+	})
+
+	local Content = create("Frame",{
+		Size=UDim2.new(1,-160,1,-60),
+		Position=UDim2.new(0,160,0,60),
+		BackgroundTransparency=1,
+		Parent=Main
+	})
+
+	--//====================================================--
+	--//                CREATE TAB FUNCTION               --
+	--//====================================================--
+
+	function Window:CreateTab(name)
+		local Tab = {}
+
+		local Button = create("TextButton",{
+			Size=UDim2.new(1,-14,0,42),
+			Position=UDim2.new(0,7,0,0),
+			Text=name,
+			BackgroundColor3=Theme.Element,
+			TextColor3=Theme.Text,
+			TextSize=14,
+			Font=Enum.Font.GothamSemibold,
+			Parent=TabHolder
+		})
+		create("UICorner",{CornerRadius=UDim.new(0,12),Parent=Button})
+		create("UIStroke",{Color=Theme.Stroke,Parent=Button})
+
+		local Page = create("ScrollingFrame",{
+			Size=UDim2.new(1,0,1,0),
+			CanvasSize=UDim2.new(0,0,0,0),
+			ScrollBarImageTransparency=0.6,
+			BackgroundTransparency=1,
+			Visible=false,
+			Parent=Content
+		})
+
+		local Layout = create("UIListLayout",{
+			Padding=UDim.new(0,10),
+			Parent=Page
+		})
+
+		Layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+			Page.CanvasSize=UDim2.new(0,0,0,Layout.AbsoluteContentSize.Y+15)
+		end)
+
+		Button.MouseEnter:Connect(function()
+			tween(Button,{BackgroundColor3=Theme.ElementHover},0.2)
+		end)
+
+		Button.MouseLeave:Connect(function()
+			tween(Button,{BackgroundColor3=Theme.Element},0.2)
+		end)
+
+		Button.MouseButton1Click:Connect(function()
+			for _,v in pairs(Content:GetChildren()) do
+				if v:IsA("ScrollingFrame") then
+					v.Visible=false
+				end
+			end
+			Page.Visible=true
+		end)
+
+		local function createElement(height)
+			local Frame=create("Frame",{
+				Size=UDim2.new(1,-20,0,height),
+				Position=UDim2.new(0,10,0,0),
+				BackgroundColor3=Theme.Element,
+				Parent=Page
+			})
+			create("UICorner",{CornerRadius=UDim.new(0,14),Parent=Frame})
+			create("UIStroke",{Color=Theme.Stroke,Parent=Frame})
+
+			Frame.BackgroundTransparency=1
+			tween(Frame,{BackgroundTransparency=0},0.35)
+
+			Frame.MouseEnter:Connect(function()
+				tween(Frame,{BackgroundColor3=Theme.ElementHover},0.2)
+			end)
+			Frame.MouseLeave:Connect(function()
+				tween(Frame,{BackgroundColor3=Theme.Element},0.2)
+			end)
+
+			return Frame
+		end
+
+		-- Elements будут добавлены в PART 2
+
+		return Tab
+	end
+
+	Window.Main = Main
+	Window.ScreenGui = ScreenGui
+
+	table.insert(self.Windows,Window)
+	return Window
+end
+
+--//====================================================--
+--//         FINAL BUILD v1.0 PREMIUM - PART 2        --
+--//                CORE UI ELEMENTS                   --
+--//====================================================--
+
+-- Вставляется ВНУТРЬ Window:CreateTab после createElement()
+
+		--//====================================================--
+		--//                      BUTTON                        --
+		--//====================================================--
+
+		function Tab:CreateButton(options)
+			local Frame = createElement(50)
+
+			local Label = create("TextLabel",{
+				Size=UDim2.new(1,-20,1,0),
+				Position=UDim2.new(0,15,0,0),
+				BackgroundTransparency=1,
+				Text=options.Name,
+				TextColor3=Theme.Text,
+				TextSize=14,
+				Font=Enum.Font.Gotham,
+				TextXAlignment=Enum.TextXAlignment.Left,
+				Parent=Frame
+			})
+
+			Frame.InputBegan:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					tween(Frame,{BackgroundColor3=Theme.AccentSoft},0.15)
+					task.wait(0.1)
+					tween(Frame,{BackgroundColor3=Theme.Element},0.2)
+					safeCall(options.Callback)
+				end
+			end)
+		end
+
+		--//====================================================--
+		--//                      TOGGLE                        --
+		--//====================================================--
+
+		function Tab:CreateToggle(options)
+			local Frame=createElement(50)
+
+			local Label=create("TextLabel",{
+				Size=UDim2.new(1,-80,1,0),
+				Position=UDim2.new(0,15,0,0),
+				BackgroundTransparency=1,
+				Text=options.Name,
+				TextColor3=Theme.Text,
+				TextSize=14,
+				Font=Enum.Font.Gotham,
+				TextXAlignment=Enum.TextXAlignment.Left,
+				Parent=Frame
+			})
+
+			local Switch=create("Frame",{
+				Size=UDim2.new(0,52,0,26),
+				Position=UDim2.new(1,-70,0.5,-13),
+				BackgroundColor3=Theme.ElementHover,
+				Parent=Frame
+			})
+			create("UICorner",{CornerRadius=UDim.new(1,0),Parent=Switch})
+
+			local Indicator=create("Frame",{
+				Size=UDim2.new(0,20,0,20),
+				Position=UDim2.new(0,3,0.5,-10),
+				BackgroundColor3=Theme.Background,
+				Parent=Switch
+			})
+			create("UICorner",{CornerRadius=UDim.new(1,0),Parent=Indicator})
+
+			local State = options.CurrentValue or false
+
+			local function update()
+				if State then
+					tween(Switch,{BackgroundColor3=Theme.Accent},0.25)
+					tween(Indicator,{Position=UDim2.new(1,-23,0.5,-10)},0.25)
+				else
+					tween(Switch,{BackgroundColor3=Theme.ElementHover},0.25)
+					tween(Indicator,{Position=UDim2.new(0,3,0.5,-10)},0.25)
+				end
+			end
+
+			update()
+
+			Frame.InputBegan:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					State = not State
+					update()
+					safeCall(options.Callback,State)
+
+					if options.Flag then
+						AmethystGUI.Flags[options.Flag] = {
+							Type="Toggle",
+							Value=State,
+							Set=function(self,val)
+								State=val
+								update()
+							end
+						}
+					end
+				end
+			end)
+		end
+
+		--//====================================================--
+		--//                       INPUT                        --
+		--//====================================================--
+
+		function Tab:CreateInput(options)
+			local Frame=createElement(65)
+
+			local Label=create("TextLabel",{
+				Size=UDim2.new(1,-20,0,20),
+				Position=UDim2.new(0,15,0,6),
+				BackgroundTransparency=1,
+				Text=options.Name,
+				TextColor3=Theme.Text,
+				TextSize=13,
+				Font=Enum.Font.Gotham,
+				TextXAlignment=Enum.TextXAlignment.Left,
+				Parent=Frame
+			})
+
+			local Box=create("TextBox",{
+				Size=UDim2.new(1,-30,0,30),
+				Position=UDim2.new(0,15,0,30),
+				BackgroundColor3=Theme.Background,
+				Text=options.CurrentValue or "",
+				PlaceholderText=options.Placeholder or "",
+				TextColor3=Theme.Text,
+				TextSize=13,
+				Font=Enum.Font.Gotham,
+				Parent=Frame
+			})
+
+			create("UICorner",{CornerRadius=UDim.new(0,8),Parent=Box})
+			create("UIStroke",{Color=Theme.Stroke,Parent=Box})
+
+			Box.FocusLost:Connect(function()
+				safeCall(options.Callback,Box.Text)
+
+				if options.Flag then
+					AmethystGUI.Flags[options.Flag] = {
+						Type="Input",
+						Value=Box.Text,
+						Set=function(self,val)
+							Box.Text=val
+						end
+					}
+				end
+			end)
+		end
+
+		--//====================================================--
+		--//                      SLIDER                        --
+		--//====================================================--
+
+		function Tab:CreateSlider(options)
+			local Frame=createElement(70)
+
+			local Label=create("TextLabel",{
+				Size=UDim2.new(1,-20,0,20),
+				Position=UDim2.new(0,15,0,6),
+				BackgroundTransparency=1,
+				Text=options.Name,
+				TextColor3=Theme.Text,
+				TextSize=13,
+				Font=Enum.Font.Gotham,
+				TextXAlignment=Enum.TextXAlignment.Left,
+				Parent=Frame
+			})
+
+			local Bar=create("Frame",{
+				Size=UDim2.new(1,-30,0,8),
+				Position=UDim2.new(0,15,0,35),
+				BackgroundColor3=Theme.Background,
+				Parent=Frame
+			})
+			create("UICorner",{CornerRadius=UDim.new(1,0),Parent=Bar})
+
+			local Fill=create("Frame",{
+				Size=UDim2.new(0,0,1,0),
+				BackgroundColor3=Theme.Accent,
+				Parent=Bar
+			})
+			create("UICorner",{CornerRadius=UDim.new(1,0),Parent=Fill})
+
+			local ValueLabel=create("TextLabel",{
+				Size=UDim2.new(1,-30,0,20),
+				Position=UDim2.new(0,15,0,50),
+				BackgroundTransparency=1,
+				Text="",
+				TextColor3=Theme.Text,
+				TextSize=12,
+				Font=Enum.Font.Gotham,
+				TextXAlignment=Enum.TextXAlignment.Right,
+				Parent=Frame
+			})
+
+			local min,max = options.Range[1],options.Range[2]
+			local current = options.CurrentValue or min
+			local dragging=false
+
+			local function updateVisual()
+				local percent=(current-min)/(max-min)
+				Fill.Size=UDim2.new(percent,0,1,0)
+				ValueLabel.Text=tostring(current)
+			end
+
+			updateVisual()
+
+			Bar.InputBegan:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					dragging=true
+				end
+			end)
+
+			UserInputService.InputEnded:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					dragging=false
+				end
+			end)
+
+			RunService.RenderStepped:Connect(function()
+				if dragging then
+					local mouseX=UserInputService:GetMouseLocation().X
+					local pos=math.clamp(mouseX-Bar.AbsolutePosition.X,0,Bar.AbsoluteSize.X)
+					local percent=pos/Bar.AbsoluteSize.X
+					current=round(min+(max-min)*percent)
+					updateVisual()
+					safeCall(options.Callback,current)
+
+					if options.Flag then
+						AmethystGUI.Flags[options.Flag] = {
+							Type="Slider",
+							Value=current,
+							Set=function(self,val)
+								current=val
+								updateVisual()
+							end
+						}
+					end
+				end
+			end)
+		end
+
+		--//====================================================--
+		--//                     DROPDOWN                       --
+		--//====================================================--
+
+		function Tab:CreateDropdown(options)
+			local Frame=createElement(50)
+
+			local Selected = options.CurrentOption or options.Options[1]
+
+			local Label=create("TextLabel",{
+				Size=UDim2.new(1,-20,1,0),
+				Position=UDim2.new(0,15,0,0),
+				BackgroundTransparency=1,
+				Text=options.Name.." : "..Selected,
+				TextColor3=Theme.Text,
+				TextSize=14,
+				Font=Enum.Font.Gotham,
+				TextXAlignment=Enum.TextXAlignment.Left,
+				Parent=Frame
+			})
+
+			local ListFrame=create("Frame",{
+				Size=UDim2.new(1,-30,0,0),
+				Position=UDim2.new(0,15,1,5),
+				BackgroundColor3=Theme.Element,
+				ClipsDescendants=true,
+				Parent=Frame
+			})
+			create("UICorner",{CornerRadius=UDim.new(0,10),Parent=ListFrame})
+
+			local UIList=create("UIListLayout",{Parent=ListFrame})
+			local open=false
+
+			for _,opt in ipairs(options.Options) do
+				local Btn=create("TextButton",{
+					Size=UDim2.new(1,0,0,30),
+					Text=opt,
+					BackgroundColor3=Theme.Background,
+					TextColor3=Theme.Text,
+					Font=Enum.Font.Gotham,
+					TextSize=13,
+					Parent=ListFrame
+				})
+				create("UICorner",{CornerRadius=UDim.new(0,6),Parent=Btn})
+
+				Btn.MouseButton1Click:Connect(function()
+					Selected=opt
+					Label.Text=options.Name.." : "..Selected
+					safeCall(options.Callback,opt)
+
+					tween(ListFrame,{Size=UDim2.new(1,-30,0,0)},0.25)
+					open=false
+
+					if options.Flag then
+						AmethystGUI.Flags[options.Flag] = {
+							Type="Dropdown",
+							Value=Selected,
+							Set=function(self,val)
+								Selected=val
+								Label.Text=options.Name.." : "..val
+							end
+						}
+					end
+				end)
+			end
+
+			Frame.InputBegan:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					open = not open
+					if open then
+						tween(ListFrame,{Size=UDim2.new(1,-30,0,#options.Options*32)},0.25)
+					else
+						tween(ListFrame,{Size=UDim2.new(1,-30,0,0)},0.25)
+					end
+				end
+			end)
+		end
+
+		--//====================================================--
+		--//                     KEYBIND                        --
+		--//====================================================--
+
+		function Tab:CreateKeybind(options)
+			local Frame=createElement(55)
+
+			local CurrentKey=options.CurrentKeybind or "None"
+			local Listening=false
+
+			local Label=create("TextLabel",{
+				Size=UDim2.new(1,-100,1,0),
+				Position=UDim2.new(0,15,0,0),
+				BackgroundTransparency=1,
+				Text=options.Name,
+				TextColor3=Theme.Text,
+				TextSize=14,
+				Font=Enum.Font.Gotham,
+				TextXAlignment=Enum.TextXAlignment.Left,
+				Parent=Frame
+			})
+
+			local Box=create("TextLabel",{
+				Size=UDim2.new(0,80,0,28),
+				Position=UDim2.new(1,-95,0.5,-14),
+				BackgroundColor3=Theme.Background,
+				Text=CurrentKey,
+				TextColor3=Theme.Text,
+				TextSize=13,
+				Font=Enum.Font.GothamBold,
+				Parent=Frame
+			})
+			create("UICorner",{CornerRadius=UDim.new(0,6),Parent=Box})
+			create("UIStroke",{Color=Theme.Stroke,Parent=Box})
+
+			Box.InputBegan:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					Listening=true
+					Box.Text="..."
+				end
+			end)
+
+			UserInputService.InputBegan:Connect(function(input,gp)
+				if gp then return end
+
+				if Listening then
+					if input.KeyCode~=Enum.KeyCode.Unknown then
+						CurrentKey=input.KeyCode.Name
+						Box.Text=CurrentKey
+						Listening=false
+
+						if options.Flag then
+							AmethystGUI.Flags[options.Flag] = {
+								Type="Keybind",
+								Value=CurrentKey,
+								Set=function(self,val)
+									CurrentKey=val
+									Box.Text=val
+								end
+							}
+						end
+
+						if options.CallOnChange then
+							safeCall(options.Callback,CurrentKey)
+						end
+					end
+				else
+					if input.KeyCode.Name==CurrentKey then
+						if not options.CallOnChange then
+							safeCall(options.Callback)
+						end
+					end
+				end
+			end)
+		end
+
+		--//====================================================--
+		--//            HSV COLOR PICKER PREMIUM               --
+		--//====================================================--
+
+		function Tab:CreateColorPicker(options)
+
+			local Frame = createElement(70)
+
+			local CurrentColor = options.Color or Color3.fromRGB(255,0,255)
+			local CurrentAlpha = options.Alpha or 1
+
+			local H,S,V = CurrentColor:ToHSV()
+
+			local Label=create("TextLabel",{
+				Size=UDim2.new(1,-70,1,0),
+				Position=UDim2.new(0,15,0,0),
+				BackgroundTransparency=1,
+				Text=options.Name,
+				TextColor3=Theme.Text,
+				TextSize=14,
+				Font=Enum.Font.Gotham,
+				TextXAlignment=Enum.TextXAlignment.Left,
+				Parent=Frame
+			})
+
+			local Preview=create("Frame",{
+				Size=UDim2.new(0,36,0,36),
+				Position=UDim2.new(1,-55,0.5,-18),
+				BackgroundColor3=CurrentColor,
+				BackgroundTransparency=1-CurrentAlpha,
+				Parent=Frame
+			})
+			create("UICorner",{CornerRadius=UDim.new(0,8),Parent=Preview})
+			create("UIStroke",{Color=Theme.Stroke,Parent=Preview})
+
+			local PickerFrame=create("Frame",{
+				Size=UDim2.new(1,-30,0,0),
+				Position=UDim2.new(0,15,1,5),
+				BackgroundColor3=Theme.Element,
+				ClipsDescendants=true,
+				Parent=Frame
+			})
+			create("UICorner",{CornerRadius=UDim.new(0,12),Parent=PickerFrame})
+
+			local open=false
+			local draggingSV=false
+			local draggingHue=false
+			local draggingAlpha=false
+
+			-- SV Square
+			local SVFrame=create("Frame",{
+				Size=UDim2.new(0,150,0,150),
+				Position=UDim2.new(0,15,0,15),
+				BackgroundColor3=Color3.fromHSV(H,1,1),
+				Parent=PickerFrame
+			})
+			create("UICorner",{CornerRadius=UDim.new(0,8),Parent=SVFrame})
+
+			local SVGradientWhite=create("UIGradient",{
+				Color=ColorSequence.new{
+					ColorSequenceKeypoint.new(0,Color3.new(1,1,1)),
+					ColorSequenceKeypoint.new(1,Color3.new(1,1,1))
+				},
+				Transparency=NumberSequence.new{
+					NumberSequenceKeypoint.new(0,0),
+					NumberSequenceKeypoint.new(1,1)
+				},
+				Parent=SVFrame
+			})
+
+			local SVGradientBlack=create("UIGradient",{
+				Color=ColorSequence.new{
+					ColorSequenceKeypoint.new(0,Color3.new(0,0,0)),
+					ColorSequenceKeypoint.new(1,Color3.new(0,0,0))
+				},
+				Rotation=90,
+				Transparency=NumberSequence.new{
+					NumberSequenceKeypoint.new(0,1),
+					NumberSequenceKeypoint.new(1,0)
+				},
+				Parent=SVFrame
+			})
+
+			local SVIndicator=create("Frame",{
+				Size=UDim2.new(0,10,0,10),
+				BackgroundColor3=Color3.new(1,1,1),
+				Parent=SVFrame
+			})
+			create("UICorner",{CornerRadius=UDim.new(1,0),Parent=SVIndicator})
+			create("UIStroke",{Color=Color3.new(0,0,0),Parent=SVIndicator})
+
+			-- Hue Slider
+			local HueFrame=create("Frame",{
+				Size=UDim2.new(0,20,0,150),
+				Position=UDim2.new(0,180,0,15),
+				Parent=PickerFrame
+			})
+			create("UICorner",{CornerRadius=UDim.new(0,8),Parent=HueFrame})
+
+			local HueGradient=create("UIGradient",{
+				Color=ColorSequence.new{
+					ColorSequenceKeypoint.new(0,Color3.fromRGB(255,0,0)),
+					ColorSequenceKeypoint.new(0.17,Color3.fromRGB(255,255,0)),
+					ColorSequenceKeypoint.new(0.33,Color3.fromRGB(0,255,0)),
+					ColorSequenceKeypoint.new(0.5,Color3.fromRGB(0,255,255)),
+					ColorSequenceKeypoint.new(0.67,Color3.fromRGB(0,0,255)),
+					ColorSequenceKeypoint.new(0.83,Color3.fromRGB(255,0,255)),
+					ColorSequenceKeypoint.new(1,Color3.fromRGB(255,0,0))
+				},
+				Rotation=90,
+				Parent=HueFrame
+			})
+
+			local HueIndicator=create("Frame",{
+				Size=UDim2.new(1,0,0,3),
+				BackgroundColor3=Color3.new(1,1,1),
+				Parent=HueFrame
+			})
+
+			-- Alpha Slider
+			local AlphaFrame=create("Frame",{
+				Size=UDim2.new(0,150,0,10),
+				Position=UDim2.new(0,15,0,175),
+				BackgroundColor3=CurrentColor,
+				Parent=PickerFrame
+			})
+			create("UICorner",{CornerRadius=UDim.new(1,0),Parent=AlphaFrame})
+
+			local AlphaIndicator=create("Frame",{
+				Size=UDim2.new(0,3,1,0),
+				BackgroundColor3=Color3.new(1,1,1),
+				Parent=AlphaFrame
+			})
+
+			-- HEX Input
+			local HexBox=create("TextBox",{
+				Size=UDim2.new(0,80,0,25),
+				Position=UDim2.new(0,180,0,175),
+				Text="",
+				BackgroundColor3=Theme.Background,
+				TextColor3=Theme.Text,
+				Font=Enum.Font.Gotham,
+				TextSize=12,
+				Parent=PickerFrame
+			})
+			create("UICorner",{CornerRadius=UDim.new(0,6),Parent=HexBox})
+			create("UIStroke",{Color=Theme.Stroke,Parent=HexBox})
+
+			local function updateColor()
+				CurrentColor=Color3.fromHSV(H,S,V)
+				Preview.BackgroundColor3=CurrentColor
+				Preview.BackgroundTransparency=1-CurrentAlpha
+				SVFrame.BackgroundColor3=Color3.fromHSV(H,1,1)
+				AlphaFrame.BackgroundColor3=CurrentColor
+
+				local r,g,b=round(CurrentColor.R*255),round(CurrentColor.G*255),round(CurrentColor.B*255)
+				HexBox.Text=string.format("#%02X%02X%02X",r,g,b)
+
+				safeCall(options.Callback,CurrentColor,CurrentAlpha)
+
+				if options.Flag then
+					AmethystGUI.Flags[options.Flag]={
+						Type="Color",
+						Value=CurrentColor,
+						ValueA=CurrentAlpha,
+						Set=function(self,val)
+							if typeof(val)=="table" then
+								CurrentColor=Color3.fromRGB(val.R,val.G,val.B)
+								CurrentAlpha=val.A or 1
+								H,S,V=CurrentColor:ToHSV()
+								updateColor()
+							end
+						end
+					}
+				end
+			end
+
+			updateColor()
+
+			-- SV Drag
+			SVFrame.InputBegan:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					draggingSV=true
+				end
+			end)
+
+			HueFrame.InputBegan:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					draggingHue=true
+				end
+			end)
+
+			AlphaFrame.InputBegan:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					draggingAlpha=true
+				end
+			end)
+
+			UserInputService.InputEnded:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					draggingSV=false
+					draggingHue=false
+					draggingAlpha=false
+				end
+			end)
+
+			RunService.RenderStepped:Connect(function()
+				local mouse=UserInputService:GetMouseLocation()
+
+				if draggingSV then
+					local x=math.clamp(mouse.X-SVFrame.AbsolutePosition.X,0,SVFrame.AbsoluteSize.X)
+					local y=math.clamp(mouse.Y-SVFrame.AbsolutePosition.Y,0,SVFrame.AbsoluteSize.Y)
+					S=x/SVFrame.AbsoluteSize.X
+					V=1-(y/SVFrame.AbsoluteSize.Y)
+					SVIndicator.Position=UDim2.new(0,x-5,0,y-5)
+					updateColor()
+				end
+
+				if draggingHue then
+					local y=math.clamp(mouse.Y-HueFrame.AbsolutePosition.Y,0,HueFrame.AbsoluteSize.Y)
+					H=y/HueFrame.AbsoluteSize.Y
+					HueIndicator.Position=UDim2.new(0,0,0,y)
+					updateColor()
+				end
+
+				if draggingAlpha then
+					local x=math.clamp(mouse.X-AlphaFrame.AbsolutePosition.X,0,AlphaFrame.AbsoluteSize.X)
+					CurrentAlpha=x/AlphaFrame.AbsoluteSize.X
+					AlphaIndicator.Position=UDim2.new(0,x,0,0)
+					updateColor()
+				end
+			end)
+
+			Frame.InputBegan:Connect(function(input)
+				if input.UserInputType==Enum.UserInputType.MouseButton1 then
+					open=not open
+					if open then
+						tween(PickerFrame,{Size=UDim2.new(1,-30,0,210)},0.3)
+					else
+						tween(PickerFrame,{Size=UDim2.new(1,-30,0,0)},0.3)
+					end
+				end
+			end)
+		end
+
+--//====================================================--
+--//         FINAL BUILD v1.0 PREMIUM - PART 4        --
+--//              KEY SYSTEM & ADMIN PANEL             --
+--//====================================================--
+
+--//====================================================--
+--//                     HASHING                       --
+--//====================================================--
+
+local function simpleHash(str)
+	local hash=0
+	for i=1,#str do
+		hash=(hash*31+string.byte(str,i))%2147483647
+	end
+	return tostring(hash)
+end
+
+-- Admin key GG_WSW (хранится только хеш)
+local ADMIN_KEY_HASH = simpleHash("GG_WSW")
+
+--//====================================================--
+--//                 KEY FILE HELPERS                  --
+--//====================================================--
+
+local function getKeyData()
+	if isfile and isfile(KEY_FILE) then
+		local raw=safeCall(readfile,KEY_FILE)
+		return safeCall(HttpService.JSONDecode,HttpService,raw)
+	end
+	return nil
+end
+
+local function saveKeyData(data)
+	if writefile then
+		safeCall(writefile,KEY_FILE,HttpService:JSONEncode(data))
+	end
+end
+
+local function getUserAuth()
+	local path=AUTH_FOLDER.."/"..LocalPlayer.UserId..".json"
+	if isfile and isfile(path) then
+		local raw=safeCall(readfile,path)
+		return safeCall(HttpService.JSONDecode,HttpService,raw)
+	end
+	return nil
+end
+
+local function saveUserAuth(hash)
+	if writefile then
+		safeCall(writefile,
+			AUTH_FOLDER.."/"..LocalPlayer.UserId..".json",
+			HttpService:JSONEncode({authorizedKeyHash=hash})
+		)
+	end
+end
+
+local function invalidateAllSessions()
+	if delfolder then
+		safeCall(delfolder,AUTH_FOLDER)
+		ensureFolder(AUTH_FOLDER)
+	end
+end
+
+--//====================================================--
+--//                  ADMIN PANEL UI                   --
+--//====================================================--
+
+local function openAdminPanel()
+
+	local Theme=AmethystGUI.Theme.Amethyst
+
+	local Gui=create("ScreenGui",{Parent=CoreGui})
+
+	local Main=create("Frame",{
+		Size=UDim2.new(0,520,0,380),
+		Position=UDim2.new(0.5,0,0.5,0),
+		AnchorPoint=Vector2.new(0.5,0.5),
+		BackgroundColor3=Theme.Background,
+		Parent=Gui
+	})
+	create("UICorner",{CornerRadius=UDim.new(0,16),Parent=Main})
+	create("UIStroke",{Color=Theme.Accent,Thickness=2,Parent=Main})
+
+	local Title=create("TextLabel",{
+		Size=UDim2.new(1,0,0,50),
+		BackgroundTransparency=1,
+		Text="🔐 ADMIN PANEL",
+		TextColor3=Theme.Accent,
+		Font=Enum.Font.GothamBold,
+		TextSize=22,
+		Parent=Main
+	})
+
+	local Content=create("Frame",{
+		Size=UDim2.new(1,-30,1,-70),
+		Position=UDim2.new(0,15,0,60),
+		BackgroundTransparency=1,
+		Parent=Main
+	})
+
+	create("UIListLayout",{
+		Padding=UDim.new(0,12),
+		Parent=Content
+	})
+
+	-- Change Key
+	local ChangeFrame=create("Frame",{
+		Size=UDim2.new(1,0,0,80),
+		BackgroundColor3=Theme.Element,
+		Parent=Content
+	})
+	create("UICorner",{CornerRadius=UDim.new(0,12),Parent=ChangeFrame})
+
+	create("TextLabel",{
+		Size=UDim2.new(1,-20,0,20),
+		Position=UDim2.new(0,10,0,8),
+		BackgroundTransparency=1,
+		Text="Установить/Изменить пользовательский ключ",
+		TextColor3=Theme.Text,
+		Font=Enum.Font.Gotham,
+		TextSize=13,
+		TextXAlignment=Enum.TextXAlignment.Left,
+		Parent=ChangeFrame
+	})
+
+	local KeyBox=create("TextBox",{
+		Size=UDim2.new(1,-20,0,30),
+		Position=UDim2.new(0,10,0,35),
+		BackgroundColor3=Theme.Background,
+		PlaceholderText="Новый ключ...",
+		TextColor3=Theme.Text,
+		Font=Enum.Font.Gotham,
+		TextSize=13,
+		Parent=ChangeFrame
+	})
+	create("UICorner",{CornerRadius=UDim.new(0,8),Parent=KeyBox})
+
+	local Status=create("TextLabel",{
+		Size=UDim2.new(1,0,0,20),
+		BackgroundTransparency=1,
+		Text="",
+		TextColor3=Theme.Accent,
+		Font=Enum.Font.Gotham,
+		TextSize=12,
+		Parent=Content
+	})
+
+	KeyBox.FocusLost:Connect(function()
+		local newKey=KeyBox.Text
+		if #newKey<3 then
+			Status.Text="Ключ слишком короткий."
+			return
+		end
+
+		saveKeyData({
+			keyHash=simpleHash(newKey),
+			changedAt=os.time()
+		})
+
+		invalidateAllSessions()
+
+		Status.Text="Ключ изменен. Все сессии сброшены."
+		KeyBox.Text=""
+	end)
+
+	-- Invalidate button
+	local ResetBtn=create("TextButton",{
+		Size=UDim2.new(1,0,0,40),
+		BackgroundColor3=Theme.Danger,
+		Text="Сбросить все сессии",
+		TextColor3=Color3.new(1,1,1),
+		Font=Enum.Font.GothamBold,
+		TextSize=14,
+		Parent=Content
+	})
+	create("UICorner",{CornerRadius=UDim.new(0,10),Parent=ResetBtn})
+
+	ResetBtn.MouseButton1Click:Connect(function()
+		invalidateAllSessions()
+		Status.Text="Все сессии инвалидированы."
+	end)
+
+	-- Close
+	local Close=create("TextButton",{
+		Size=UDim2.new(0,30,0,30),
+		Position=UDim2.new(1,-40,0,10),
+		Text="✕",
+		BackgroundTransparency=1,
+		TextColor3=Theme.Text,
+		Font=Enum.Font.GothamBold,
+		TextSize=18,
+		Parent=Main
+	})
+
+	Close.MouseButton1Click:Connect(function()
+		Gui:Destroy()
+	end)
+end
+
+--//====================================================--
+--//                     KEY UI                        --
+--//====================================================--
+
+local function openKeyUI(callback)
+
+	local Theme=AmethystGUI.Theme.Amethyst
+
+	local Gui=create("ScreenGui",{Parent=CoreGui})
+
+	local Main=create("Frame",{
+		Size=UDim2.new(0,400,0,200),
+		Position=UDim2.new(0.5,0,0.5,0),
+		AnchorPoint=Vector2.new(0.5,0.5),
+		BackgroundColor3=Theme.Background,
+		Parent=Gui
+	})
+	create("UICorner",{CornerRadius=UDim.new(0,16),Parent=Main})
+	create("UIStroke",{Color=Theme.Stroke,Parent=Main})
+
+	create("TextLabel",{
+		Size=UDim2.new(1,0,0,50),
+		BackgroundTransparency=1,
+		Text="Введите ключ",
+		TextColor3=Theme.Text,
+		Font=Enum.Font.GothamBold,
+		TextSize=20,
+		Parent=Main
+	})
+
+	local Input=create("TextBox",{
+		Size=UDim2.new(1,-40,0,40),
+		Position=UDim2.new(0,20,0,70),
+		BackgroundColor3=Theme.Element,
+		TextColor3=Theme.Text,
+		PlaceholderText="Key...",
+		Font=Enum.Font.Gotham,
+		TextSize=14,
+		Parent=Main
+	})
+	create("UICorner",{CornerRadius=UDim.new(0,10),Parent=Input})
+
+	local Status=create("TextLabel",{
+		Size=UDim2.new(1,0,0,20),
+		Position=UDim2.new(0,0,1,-30),
+		BackgroundTransparency=1,
+		Text="",
+		TextColor3=Theme.Danger,
+		Font=Enum.Font.Gotham,
+		TextSize=12,
+		Parent=Main
+	})
+
+	Input.FocusLost:Connect(function()
+		local entered=Input.Text
+		if #entered==0 then return end
+
+		local keyData=getKeyData()
+		if not keyData then
+			Status.Text="Ключ не установлен."
+			return
+		end
+
+		if simpleHash(entered)==keyData.keyHash then
+			saveUserAuth(keyData.keyHash)
+			Gui:Destroy()
+			callback(true)
+		else
+			Status.Text="Неверный ключ."
+		end
+	end)
+end
+
+--//====================================================--
+--//                       INIT                        --
+--//====================================================--
+
+function AmethystGUI:Init()
+
+	local keyData=getKeyData()
+
+	-- First run
+	if not keyData then
+		if LocalPlayer.UserId==10908220603 then
+			openAdminPanel()
+			repeat task.wait(1) until getKeyData()
+		else
+			LocalPlayer:Kick("Ключ не установлен. Обратитесь к администратору.")
+			return nil
+		end
+	end
+
+	-- Session check
+	local auth=getUserAuth()
+	if auth and auth.authorizedKeyHash==keyData.keyHash then
+		return self
+	end
+
+	local success=false
+	openKeyUI(function(ok)
+		success=ok
+	end)
+
+	repeat task.wait() until success
+
+	return self
+end
+
+print("AmethystGUI v1.0 PREMIUM Loaded")
+return AmethystGUI
